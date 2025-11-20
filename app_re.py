@@ -583,10 +583,10 @@ def get_publications_dataframe() -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(
             [
-                {"논문명": "Smart Agriculture using AI", "저널": "Nature Food", "발행연도": 2024, "분야": "생명", "피인용수": 42},
-                {"논문명": "Energy Storage Materials", "저널": "Advanced Energy Materials", "발행연도": 2023, "분야": "공학", "피인용수": 55},
-                {"논문명": "Carbon Neutral Cities", "저널": "Renewable Energy", "발행연도": 2022, "분야": "환경", "피인용수": 33},
-                {"논문명": "Precision Medicine Pipeline", "저널": "Lancet Digital Health", "발행연도": 2024, "분야": "의생명", "피인용수": 29},
+                {"논문명": "Smart Agriculture using AI", "저널": "Nature Food", "발행연도": 2024, "분야": "생명", "피인용수": 42, "논문 유형": "Article", "저자": "Ahn J.; Kim S."},
+                {"논문명": "Energy Storage Materials", "저널": "Advanced Energy Materials", "발행연도": 2023, "분야": "공학", "피인용수": 55, "논문 유형": "Review", "저자": "Lee H.; Park K."},
+                {"논문명": "Carbon Neutral Cities", "저널": "Renewable Energy", "발행연도": 2022, "분야": "환경", "피인용수": 33, "논문 유형": "Article", "저자": "Choi M.; Seo G."},
+                {"논문명": "Precision Medicine Pipeline", "저널": "Lancet Digital Health", "발행연도": 2024, "분야": "의생명", "피인용수": 29, "논문 유형": "Article", "저자": "Jung Y.; Lee J."},
             ]
         )
     subject_columns = [
@@ -602,6 +602,13 @@ def get_publications_dataframe() -> pd.DataFrame:
             else:
                 subject_series = subject_series.fillna(df[col])
 
+    doc_type_col = None
+    for col in df.columns:
+        normalized = col.strip().lower().replace(" ", "")
+        if normalized in {"publicationtype", "documenttype"}:
+            doc_type_col = col
+            break
+
     mapped = pd.DataFrame(
         {
             "논문명": df.get("Title"),
@@ -609,6 +616,8 @@ def get_publications_dataframe() -> pd.DataFrame:
             "발행연도": pd.to_numeric(df.get("Year"), errors="coerce"),
             "분야": subject_series,
             "피인용수": pd.to_numeric(df.get("Citations"), errors="coerce"),
+            "논문 유형": df.get(doc_type_col) if doc_type_col else None,
+            "저자": df.get("Authors"),
         }
     )
     mapped = mapped.dropna(subset=["발행연도"])
@@ -616,6 +625,8 @@ def get_publications_dataframe() -> pd.DataFrame:
     mapped["피인용수"] = mapped["피인용수"].fillna(0).astype(int)
     mapped["저널"] = mapped["저널"].fillna("-")
     mapped["분야"] = mapped["분야"].fillna("-")
+    mapped["논문 유형"] = mapped["논문 유형"].fillna("미분류")
+    mapped["저자"] = mapped["저자"].fillna("-")
     return mapped.reset_index(drop=True)
 
 def render_publications_tab() -> None:
@@ -626,13 +637,28 @@ def render_publications_tab() -> None:
         return
 
     year_min, year_max = int(publications_df["발행연도"].min()), int(publications_df["발행연도"].max())
-    year_range = st.slider("발행연도", year_min, year_max, (year_min, year_max))
-    fields = st.multiselect("연구 분야", options=sorted(publications_df["분야"].unique()), default=sorted(publications_df["분야"].unique()))
+    start_col, end_col = st.columns(2)
+    with start_col:
+        start_year = st.number_input("시작 연도", min_value=year_min, max_value=year_max, value=year_min, step=1, key="pub-year-start")
+    with end_col:
+        end_year = st.number_input("종료 연도", min_value=year_min, max_value=year_max, value=year_max, step=1, key="pub-year-end")
+    selected_years = tuple(sorted((int(start_year), int(end_year))))
+
+    doc_types = sorted(publications_df["논문 유형"].dropna().unique())
+    selected_types = st.multiselect("논문 유형", options=doc_types, default=doc_types)
 
     filtered = publications_df[
-        publications_df["발행연도"].between(year_range[0], year_range[1])
-        & publications_df["분야"].isin(fields)
+        publications_df["발행연도"].between(selected_years[0], selected_years[1])
+        & publications_df["논문 유형"].isin(selected_types)
     ]
+
+    # 기본 표시 순서를 맞춰서 저자를 저널 앞에 배치
+    display_order = ["논문명", "저자", "저널", "발행연도", "분야", "논문 유형", "피인용수"]
+    ordered_cols = [col for col in display_order if col in filtered.columns] + [
+        col for col in filtered.columns if col not in display_order
+    ]
+    filtered = filtered[ordered_cols]
+
     st.dataframe(filtered, use_container_width=True, hide_index=True)
     st.download_button(
         "CSV 다운로드",
