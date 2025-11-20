@@ -5,6 +5,7 @@ from pathlib import Path
 
 import altair as alt
 import pandas as pd
+from pandas.io.formats.style import Styler
 import streamlit as st
 
 # 기본 페이지 설정
@@ -76,6 +77,7 @@ FACT_SHEET_FILE = Path(__file__).with_name("통합 문서1.xlsx")
 SCOPUS_EXPORT_FILE = Path(__file__).with_name(
     "Publications_at_Jeonbuk_National_University_2020_-_2024.csv"
 )
+SCIVAL_BENCHMARK_FILE = Path(__file__).with_name("GT100_비교대상 대학_SciVal.xlsx")
 
 # 기본 Fact Sheet (엑셀 미제공 시 사용)
 EMBEDDED_FACT_SHEET = {
@@ -307,27 +309,111 @@ SCIVAL_BENCHMARK_MULTIPLIERS = {
     "University B": 0.94,
 }
 
-def build_scival_benchmark_dataframe(year: int, fact_df: pd.DataFrame) -> pd.DataFrame:
-    columns = []
-    data = {uni: [] for uni in SCIVAL_BENCHMARK_MULTIPLIERS}
-    for _, row in fact_df.iterrows():
-        unit = row.get("단위", "")
-        label = row["지표명"]
-        label_with_unit = f"{label} ({unit})" if unit and unit != "-" else label
-        columns.append((row["indicator_group"], label_with_unit))
-        base_value = row.get(year)
-        for uni, multiplier in SCIVAL_BENCHMARK_MULTIPLIERS.items():
-            if pd.notna(base_value):
-                value = round(float(base_value) * multiplier, 2)
-            else:
-                value = None
-            data[uni].append(value)
-    multi_columns = pd.MultiIndex.from_tuples(columns, names=["분야", "지표"])
-    universities = list(SCIVAL_BENCHMARK_MULTIPLIERS.keys())
-    values = [data[uni] for uni in universities]
-    df = pd.DataFrame(values, columns=multi_columns, index=universities)
-    df.index.name = "기관"
-    return df
+@st.cache_data
+def load_scival_benchmark_excel(path: Path) -> dict[str, pd.DataFrame]:
+    if not path.exists():
+        return {}
+    df_raw = pd.read_excel(path, header=None)
+    if df_raw.empty:
+        return {}
+
+    def _parse_block(header_row_idx: int, data_start_idx: int, data_end_idx: int) -> pd.DataFrame:
+        raw_header = df_raw.iloc[header_row_idx].ffill()
+        raw_group = df_raw.iloc[header_row_idx - 1].ffill() if header_row_idx > 0 else None
+        seen: dict[tuple[str, str], int] = {}
+        group_names: list[str] = []
+        base_names: list[str] = []
+        for idx, col in enumerate(raw_header):
+            base_name = str(col) if pd.notna(col) else f"항목{idx}"
+            if idx == 0:
+                base_name = "대학"
+            group_label = ""
+            if raw_group is not None and idx < len(raw_group):
+                gl = raw_group.iloc[idx]
+                if pd.notna(gl):
+                    group_label = str(gl).strip()
+            key = (group_label, base_name)
+            count = seen.get(key, 0)
+            seen[key] = count + 1
+            if count:
+                base_name = f"{base_name}_{count}"
+            group_names.append(group_label)
+            base_names.append(base_name)
+        data = df_raw.iloc[data_start_idx:data_end_idx].reset_index(drop=True)
+        columns = pd.MultiIndex.from_tuples(list(zip(group_names, base_names)), names=["지표 그룹", "지표"])
+        data.columns = columns
+        data = data.dropna(subset=[("", "대학")])
+        for idx in range(1, len(data.columns)):
+            numeric = pd.to_numeric(data.iloc[:, idx], errors="coerce")
+            if numeric.notna().sum() >= max(1, len(data) // 3):
+                data.iloc[:, idx] = numeric
+        return data.reset_index(drop=True)
+
+    # 첫 번째 블록(예: 2024년)
+    first_header_idx = 1
+    # 두 번째 블록(예: 최근 5개년) 시작 행 찾기
+    first_col_series = df_raw.iloc[:, 0].astype(str)
+    five_header_idx = None
+    for idx, val in first_col_series.items():
+        if isinstance(val, str) and "5" in val:
+            five_header_idx = idx
+            break
+
+    sections: dict[str, pd.DataFrame] = {}
+    if five_header_idx is None:
+        sections["2024년"] = _parse_block(first_header_idx, first_header_idx + 1, len(df_raw))
+    else:
+        sections["2024년"] = _parse_block(first_header_idx, first_header_idx + 1, five_header_idx)
+        sections["최근 5개년"] = _parse_block(five_header_idx, five_header_idx + 1, len(df_raw))
+    return sections
+
+
+def format_scival_for_display(df: pd.DataFrame) -> pd.DataFrame:
+    """표시용: NaN은 '-', 수치는 콤마와 소수 둘째자리까지."""
+    display = df.copy()
+    for col in display.columns:
+        series = display[col]
+        if pd.api.types.is_numeric_dtype(series):
+            display[col] = series.apply(
+                lambda v: "-"
+                if pd.isna(v)
+                else (f"{int(v):,}" if float(v).is_integer() else f"{float(v):,.2f}")
+            )
+        else:
+            display[col] = series.fillna("-")
+    return display
+
+
+def style_scival_table(df: pd.DataFrame) -> Styler:
+    def _fmt(v: object) -> str:
+        if pd.isna(v):
+            return "-"
+        try:
+            fv = float(v)
+            return f"{int(fv):,}" if fv.is_integer() else f"{fv:,.2f}"
+        except Exception:
+            return str(v)
+
+    return df.style.format(_fmt)
+
+
+def _scival_group_order_key(group_name: str) -> tuple[int, str]:
+    """그룹 정렬: 영향력/우수성/협력/공공성 및 개방성/지속성 순."""
+    g_lower = (group_name or "").lower()
+    g_orig = group_name or ""
+    if "영향" in g_orig or "impact" in g_lower:
+        order = 0
+    elif "우수" in g_orig or "excellence" in g_lower:
+        order = 1
+    elif "협력" in g_orig or "collaboration" in g_lower:
+        order = 2
+    elif "공공" in g_orig or "개방" in g_orig or "public" in g_lower or "openness" in g_lower:
+        order = 3
+    elif "지속" in g_orig or "sustainability" in g_lower or "sdg" in g_lower:
+        order = 4
+    else:
+        order = 5
+    return (order, group_name)
 
 def render_global_ranking_tab() -> None:
     st.subheader("Global Ranking")
@@ -745,27 +831,54 @@ def render_benchmark_the_qs_tab() -> None:
 
 def render_benchmark_scival_tab() -> None:
     st.subheader("벤치마킹 대학 비교 (SciVal)")
-    fact_df = get_fact_sheet_dataframe()
-    year_options = get_fact_sheet_year_columns(fact_df)
-    if not year_options:
-        st.warning("표시할 연도 데이터가 없습니다.")
+    scival_sections = load_scival_benchmark_excel(SCIVAL_BENCHMARK_FILE)
+    if not scival_sections:
+        st.warning("SciVal 벤치마킹 데이터를 불러올 수 없습니다. 엑셀 파일을 확인해 주세요.")
         return
 
-    selected_year = st.selectbox(
-        "비교 연도",
-        year_options,
-        format_func=lambda y: f"{y}년",
-        key="scival-year",
+    period_options = list(scival_sections.keys())
+    selected_period = st.radio("기간 선택", period_options, horizontal=True)
+    scival_df = scival_sections[selected_period]
+
+    universities = scival_df[("", "대학")].tolist()
+    selected_unis = st.multiselect("비교 대학 선택", options=universities, default=universities)
+    df_filtered = scival_df[scival_df[("", "대학")].isin(selected_unis)] if selected_unis else scival_df
+
+    # 그룹 선택 -> 그룹별 표
+    groups = sorted(
+        {g for g, n in scival_df.columns if g and n != "대학"},
+        key=_scival_group_order_key,
     )
-    scival_df = build_scival_benchmark_dataframe(selected_year, fact_df)
-    st.dataframe(scival_df, use_container_width=True)
+    selected_group = st.selectbox("지표 그룹 선택", groups, index=0 if groups else None)
+    group_metrics = [(g, n) for g, n in scival_df.columns if g == selected_group and n != "대학"]
+    group_cols = [("", "대학")] + group_metrics
+    group_df = df_filtered[group_cols]
+    st.markdown("#### 선택한 그룹 표")
+    st.dataframe(style_scival_table(group_df), use_container_width=True, hide_index=True)
+
+    # 그룹 내 세부 지표 차트
+    metric_names = [name for _, name in group_metrics]
+    if not group_metrics:
+        st.warning("선택한 그룹에 표시할 지표가 없습니다.")
+        return
+    selected_metric_name = st.selectbox("세부 지표 선택", metric_names, index=0)
+    metric = (selected_group, selected_metric_name)
+    chart_df = group_df[[("", "대학"), metric]].copy()
+    chart_df.columns = ["대학", "값"]
+    chart_df = chart_df.set_index("대학")
+    st.markdown("#### 세부 지표 차트")
+    st.bar_chart(chart_df)
+
+    # 전체 표 및 다운로드
+    st.markdown("#### 전체 테이블")
+    st.dataframe(style_scival_table(df_filtered), use_container_width=True, hide_index=True)
     st.download_button(
         "CSV 다운로드",
-        scival_df.to_csv(encoding="utf-8-sig"),
-        file_name=f"scival_benchmark_{selected_year}.csv",
+        df_filtered.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="scival_benchmark_filtered.csv",
         mime="text/csv",
     )
-    st.caption("각 대학 값은 Fact Sheet 수치를 단순 가중치로 보정한 모의 값입니다.")
+    st.caption("GT100 비교대상 대학의 SciVal 지표를 시각화하고 다운로드할 수 있습니다.")
 
 def render_placeholder(section_name: str) -> None:
     st.info(f"{section_name} 섹션은 추후 구현 예정입니다.")
