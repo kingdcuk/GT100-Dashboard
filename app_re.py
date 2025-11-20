@@ -457,26 +457,15 @@ def render_fact_sheet_tab() -> None:
     if numeric_years:
         year_min, year_max = min(numeric_years), max(numeric_years)
         range_state_key = "fact_chart_year_range"
-        slider_state_key = "fact-chart-year-slider"
         start_key = "fact-chart-year-start"
         end_key = "fact-chart-year-end"
 
         if range_state_key not in st.session_state:
             st.session_state[range_state_key] = (year_min, year_max)
-
-        slider_range = st.slider(
-            "연도 범위",
-            min_value=year_min,
-            max_value=year_max,
-            value=st.session_state[range_state_key],
-            step=1,
-            key=slider_state_key,
-        )
-
-        if tuple(slider_range) != st.session_state[range_state_key]:
-            st.session_state[range_state_key] = tuple(slider_range)
-            st.session_state[start_key] = slider_range[0]
-            st.session_state[end_key] = slider_range[1]
+        if start_key not in st.session_state:
+            st.session_state[start_key] = st.session_state[range_state_key][0]
+        if end_key not in st.session_state:
+            st.session_state[end_key] = st.session_state[range_state_key][1]
 
         current_start, current_end = st.session_state[range_state_key]
         start_col, end_col = st.columns(2)
@@ -503,7 +492,6 @@ def render_fact_sheet_tab() -> None:
         selected_range = (max(year_min, selected_range[0]), min(year_max, selected_range[1]))
         if selected_range != st.session_state[range_state_key]:
             st.session_state[range_state_key] = selected_range
-            st.session_state[slider_state_key] = selected_range
 
         year_range = st.session_state[range_state_key]
         metric_multi = st.multiselect(
