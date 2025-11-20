@@ -647,10 +647,24 @@ def render_publications_tab() -> None:
     doc_types = sorted(publications_df["논문 유형"].dropna().unique())
     selected_types = st.multiselect("논문 유형", options=doc_types, default=doc_types)
 
+    search_query = st.text_input("논문 검색 (제목/저자/저널)", value="", key="pub-search").strip().lower()
+
     filtered = publications_df[
         publications_df["발행연도"].between(selected_years[0], selected_years[1])
         & publications_df["논문 유형"].isin(selected_types)
     ]
+
+    if search_query:
+        mask = (
+            filtered["논문명"].fillna("").str.lower().str.contains(search_query)
+            | filtered["저자"].fillna("").str.lower().str.contains(search_query)
+            | filtered["저널"].fillna("").str.lower().str.contains(search_query)
+        )
+        filtered = filtered[mask]
+
+    if filtered.empty:
+        st.info("조건에 맞는 논문이 없습니다.")
+        return
 
     # 기본 표시 순서를 맞춰서 저자를 저널 앞에 배치
     display_order = ["논문명", "저자", "저널", "발행연도", "분야", "논문 유형", "피인용수"]
@@ -659,7 +673,16 @@ def render_publications_tab() -> None:
     ]
     filtered = filtered[ordered_cols]
 
-    st.dataframe(filtered, use_container_width=True, hide_index=True)
+    page_size = 50
+    total_rows = len(filtered)
+    total_pages = max(1, math.ceil(total_rows / page_size))
+    current_page = int(st.number_input("페이지", min_value=1, max_value=total_pages, value=1, step=1, key="pub-page"))
+    start_idx = (current_page - 1) * page_size
+    end_idx = start_idx + page_size
+    page_df = filtered.iloc[start_idx:end_idx]
+
+    st.dataframe(page_df, use_container_width=True, hide_index=True, height=600)
+    st.caption(f"총 {total_rows}건 · 페이지 {current_page}/{total_pages} · 페이지당 {page_size}건")
     st.download_button(
         "CSV 다운로드",
         filtered.to_csv(index=False).encode("utf-8-sig"),
