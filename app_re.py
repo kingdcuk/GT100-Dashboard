@@ -384,7 +384,7 @@ def format_scival_for_display(df: pd.DataFrame) -> pd.DataFrame:
     return display
 
 
-def style_scival_table(df: pd.DataFrame) -> Styler:
+def style_scival_table(df: pd.DataFrame, highlight_university: str | None = "전북대") -> Styler:
     def _fmt(v: object) -> str:
         if pd.isna(v):
             return "-"
@@ -394,7 +394,20 @@ def style_scival_table(df: pd.DataFrame) -> Styler:
         except Exception:
             return str(v)
 
-    return df.style.format(_fmt)
+    styler = df.style.format(_fmt)
+
+    if highlight_university and ("", "대학") in df.columns:
+        def _highlight(row: pd.Series) -> list[str]:
+            uni_name = row.get(("", "대학"))
+            if pd.isna(uni_name):
+                return [""] * len(row)
+            is_target = str(uni_name).strip() == highlight_university
+            style = "background-color: #fff3f5; font-weight: 600;" if is_target else ""
+            return [style] * len(row)
+
+        styler = styler.apply(_highlight, axis=1)
+
+    return styler
 
 
 def _scival_group_order_key(group_name: str) -> tuple[int, str]:
@@ -901,7 +914,11 @@ def render_benchmark_scival_tab() -> None:
     group_cols = [("", "대학")] + group_metrics
     group_df = df_filtered[group_cols]
     st.markdown("#### 선택한 그룹 표")
-    st.dataframe(style_scival_table(group_df), use_container_width=True, hide_index=True)
+    st.dataframe(
+        style_scival_table(group_df, highlight_university="전북대"),
+        use_container_width=True,
+        hide_index=True,
+    )
 
     # 그룹 내 세부 지표 차트
     metric_names = [name for _, name in group_metrics]
@@ -912,13 +929,34 @@ def render_benchmark_scival_tab() -> None:
     metric = (selected_group, selected_metric_name)
     chart_df = group_df[[("", "대학"), metric]].copy()
     chart_df.columns = ["대학", "값"]
-    chart_df = chart_df.set_index("대학")
+    bar_data = chart_df.dropna(subset=["값"]).reset_index(drop=True)
+    highlight_color = "#c1121f"
+    default_color = "#9db7e0"
     st.markdown("#### 세부 지표 차트")
-    st.bar_chart(chart_df)
+    bar_chart = (
+        alt.Chart(bar_data)
+        .mark_bar()
+        .encode(
+            x=alt.X("대학:N", sort="-y", title="대학"),
+            y=alt.Y("값:Q", title="값"),
+            color=alt.condition(
+                alt.FieldEqualPredicate(field="대학", equal="전북대"),
+                alt.value(highlight_color),
+                alt.value(default_color),
+            ),
+            tooltip=["대학:N", alt.Tooltip("값:Q", title="값")],
+        )
+        .properties(height=340)
+    )
+    st.altair_chart(bar_chart, use_container_width=True)
 
     # 전체 표 및 다운로드
     st.markdown("#### 전체 테이블")
-    st.dataframe(style_scival_table(df_filtered), use_container_width=True, hide_index=True)
+    st.dataframe(
+        style_scival_table(df_filtered, highlight_university="전북대"),
+        use_container_width=True,
+        hide_index=True,
+    )
     st.download_button(
         "CSV 다운로드",
         df_filtered.to_csv(index=False, encoding="utf-8-sig"),
