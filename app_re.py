@@ -1406,7 +1406,7 @@ def render_global_benchmark_tab() -> None:
 NAV_STRUCTURE = {
     "전북대학교 현황": [
         ("글로벌 랭킹/벤치마킹", render_global_benchmark_tab),
-        ("Fact Sheet", render_fact_sheet_tab),
+        ("전북대 연구성과지표", render_fact_sheet_tab),
     ],
     "전북대 연구성과": [
         ("Scopus 5개년 연구성과", render_publications_tab),
