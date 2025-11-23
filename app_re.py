@@ -80,6 +80,8 @@ SCOPUS_EXPORT_FILE = Path(__file__).with_name(
 SCIVAL_BENCHMARK_FILE = Path(__file__).with_name("GT100_비교대상 대학_SciVal.xlsx")
 THE_BENCHMARK_PATTERN = "GT100_*THE*.xlsx"
 QS_BENCHMARK_PATTERN = "GT100_*QS*.xlsx"
+INTERNATIONAL_FWCI_PATTERN = "*FWCI_Top50.xlsx"
+THE_SUBJECT_FWCI_DIR = Path(__file__).parent / "251122_THE_subject_FWCI_Top50_finaldata" / "251122_THE_subject_FWCI_Top50_finaldata"
 
 # 기본 Fact Sheet (엑셀 미제공 시 사용)
 EMBEDDED_FACT_SHEET = {
@@ -473,6 +475,113 @@ def load_benchmark_the_qs_data() -> dict[str, pd.DataFrame]:
             if not parsed.empty:
                 datasets[scheme] = parsed
     return datasets
+
+
+def _find_international_fwci_file() -> Path | None:
+    base_dir = Path(__file__).parent
+    for candidate in sorted(base_dir.glob(INTERNATIONAL_FWCI_PATTERN)):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _normalize_fwci_dataframe(df: pd.DataFrame, subject: str | None = None) -> pd.DataFrame:
+    rename_candidates = {
+        "university": "University",
+        "institution": "Institution",
+        "institution_name": "Institution",
+        "institution_region": "Institution_Region",
+        "institution region": "Institution_Region",
+        "fwci": "FWCI",
+    }
+    normalized = df.rename(
+        columns={
+            col: rename_candidates.get(col.lower().replace(" ", "_"), col)
+            for col in df.columns
+        }
+    )
+    for required in ("University", "Institution", "Institution_Region", "FWCI"):
+        if required not in normalized.columns:
+            normalized[required] = None
+    normalized["FWCI"] = pd.to_numeric(normalized["FWCI"], errors="coerce")
+    if subject is not None:
+        normalized["Subject"] = subject
+    ordered_cols = ["University", "Institution", "Institution_Region", "FWCI"]
+    if "Subject" in normalized.columns:
+        ordered_cols.append("Subject")
+    normalized = normalized[ordered_cols]
+    return normalized.dropna(subset=["Institution"]).reset_index(drop=True)
+
+
+@st.cache_data
+def load_international_fwci_top50() -> pd.DataFrame:
+    path = _find_international_fwci_file()
+    if not path:
+        return pd.DataFrame()
+    try:
+        df_raw = pd.read_excel(path)
+    except Exception:
+        return pd.DataFrame()
+    return _normalize_fwci_dataframe(df_raw)
+
+
+@st.cache_data
+def load_subject_fwci_top50() -> pd.DataFrame:
+    base_dir = THE_SUBJECT_FWCI_DIR
+    if not base_dir.exists():
+        return pd.DataFrame()
+    frames: list[pd.DataFrame] = []
+    for path in sorted(base_dir.glob("*.xlsx")):
+        try:
+            df_raw = pd.read_excel(path)
+        except Exception:
+            continue
+        subject_name = path.stem.replace("THE_Subject_", "").replace("_", " ").strip()
+        frames.append(_normalize_fwci_dataframe(df_raw, subject=subject_name))
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _fwci_display_dataframe(df: pd.DataFrame, include_subject: bool = False) -> pd.DataFrame:
+    rename_map = {
+        "University": "대학",
+        "Institution": "협력 기관",
+        "Institution_Region": "협력 국가/지역",
+        "FWCI": "FWCI",
+        "Subject": "THE 학문분야",
+    }
+    display_df = df.rename(columns=rename_map)
+    base_order = ["대학", "협력 기관", "협력 국가/지역", "FWCI"]
+    if include_subject and "THE 학문분야" in display_df.columns:
+        base_order = ["THE 학문분야"] + base_order
+    ordered_cols = [col for col in base_order if col in display_df.columns] + [
+        col for col in display_df.columns if col not in base_order
+    ]
+    return display_df[ordered_cols]
+
+
+def style_fwci_table(df: pd.DataFrame) -> Styler:
+    """대학별로 행 색상을 달리 적용."""
+    palette = ["#fde9f4", "#eef6ff", "#fef5e5", "#f3f9ef", "#e8f0fe", "#fff3e0", "#e8f6ef"]
+    universities = df["대학"].astype(str).fillna("-").unique().tolist() if "대학" in df.columns else []
+    color_map = {uni: palette[i % len(palette)] for i, uni in enumerate(universities)}
+
+    def _highlight(row: pd.Series) -> list[str]:
+        uni = str(row.get("대학", "-"))
+        color = color_map.get(uni, "#ffffff")
+        return [f"background-color: {color}"] * len(row)
+
+    def _fmt(v: object) -> str:
+        if pd.isna(v):
+            return "-"
+        try:
+            num = float(v)
+            return f"{num:,.2f}" if not num.is_integer() else f"{int(num):,}"
+        except Exception:
+            return str(v)
+
+    return df.style.format(_fmt).apply(_highlight, axis=1)
 
 
 def _get_benchmark_score_for_jbnu(scheme: str) -> tuple[int | None, str | None, float | None]:
@@ -1385,6 +1494,119 @@ def render_benchmark_scival_tab(show_heading: bool = True) -> None:
     )
     st.caption("GT100 비교대상 대학의 SciVal 지표를 시각화하고 다운로드할 수 있습니다.")
 
+def render_international_fwci_by_university_tab() -> None:
+    st.subheader("대학별 국제 연구협력 FWCI Top 50")
+    fwci_df = load_international_fwci_top50()
+    if fwci_df.empty:
+        st.warning("국제 연구협력_FWCI_Top50.xlsx 데이터를 불러오지 못했습니다. 파일을 확인해주세요.")
+        return
+
+    universities = sorted(fwci_df["University"].dropna().astype(str).unique().tolist())
+    default_idx = 0
+    if universities:
+        try:
+            default_idx = universities.index("전북대")
+        except ValueError:
+            default_idx = 0
+    selected_university = st.selectbox("대학 선택", universities, index=default_idx if universities else None)
+    filtered_df = fwci_df[fwci_df["University"] == selected_university] if selected_university else fwci_df
+
+    st.markdown("#### 대학별 국제 연구 협력")
+    st.dataframe(_fwci_display_dataframe(filtered_df), use_container_width=True, hide_index=True)
+    safe_university = str(selected_university or "all").replace(" ", "_")
+    st.download_button(
+        "CSV 다운로드",
+        filtered_df.to_csv(index=False, encoding="utf-8-sig"),
+        file_name=f"fwci_top50_{safe_university}.csv",
+        mime="text/csv",
+    )
+
+    st.markdown("#### FWCI 차트")
+    chart_data = filtered_df.dropna(subset=["FWCI"]).copy()
+    if chart_data.empty:
+        st.info("표시할 차트 데이터가 없습니다.")
+    else:
+        chart_data = chart_data.sort_values("FWCI", ascending=False).head(20)
+        bar_chart = (
+            alt.Chart(chart_data)
+            .mark_bar()
+            .encode(
+                x=alt.X("Institution:N", sort="-y", title="협력 기관"),
+                y=alt.Y("FWCI:Q", title="FWCI"),
+                color=alt.Color("Institution_Region:N", title="협력 국가/지역"),
+                tooltip=[
+                    alt.Tooltip("Institution:N", title="협력 기관"),
+                    alt.Tooltip("Institution_Region:N", title="국가/지역"),
+                    alt.Tooltip("FWCI:Q", title="FWCI"),
+                ],
+            )
+            .properties(height=340)
+        )
+        st.altair_chart(bar_chart, use_container_width=True)
+
+    st.markdown("#### 전체 연구 협력")
+    st.dataframe(style_fwci_table(_fwci_display_dataframe(fwci_df)), use_container_width=True, hide_index=True)
+    st.download_button(
+        "전체 연구 협력 CSV 다운로드",
+        fwci_df.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="fwci_international_all.csv",
+        mime="text/csv",
+    )
+
+
+def render_international_fwci_by_subject_tab() -> None:
+    st.subheader("학문분야별(THE) FWCI Top 50")
+    fwci_df = load_subject_fwci_top50()
+    if fwci_df.empty:
+        st.warning("학문분야별 THE FWCI Top 50 데이터를 불러오지 못했습니다. 폴더와 파일을 확인해주세요.")
+        return
+
+    subjects = sorted(fwci_df["Subject"].dropna().astype(str).unique().tolist())
+    selected_subject = st.selectbox("THE 학문분야 선택", subjects, index=0 if subjects else None)
+    filtered_df = fwci_df[fwci_df["Subject"] == selected_subject] if selected_subject else fwci_df
+
+    st.markdown("#### 분야별 국제 연구 협력")
+    st.dataframe(_fwci_display_dataframe(filtered_df, include_subject=True), use_container_width=True, hide_index=True)
+    safe_subject = str(selected_subject or "all").replace(" ", "_")
+    st.download_button(
+        "CSV 다운로드",
+        filtered_df.to_csv(index=False, encoding="utf-8-sig"),
+        file_name=f"fwci_top50_subject_{safe_subject}.csv",
+        mime="text/csv",
+    )
+
+    st.markdown("#### FWCI 차트")
+    chart_data = filtered_df.dropna(subset=["FWCI"]).copy()
+    if chart_data.empty:
+        st.info("표시할 차트 데이터가 없습니다.")
+    else:
+        chart_data = chart_data.sort_values("FWCI", ascending=False).head(20)
+        bar_chart = (
+            alt.Chart(chart_data)
+            .mark_bar()
+            .encode(
+                x=alt.X("Institution:N", sort="-y", title="협력 기관"),
+                y=alt.Y("FWCI:Q", title="FWCI"),
+                color=alt.Color("Institution_Region:N", title="협력 국가/지역"),
+                tooltip=[
+                    alt.Tooltip("Institution:N", title="협력 기관"),
+                    alt.Tooltip("Institution_Region:N", title="국가/지역"),
+                    alt.Tooltip("FWCI:Q", title="FWCI"),
+                ],
+            )
+            .properties(height=340)
+        )
+        st.altair_chart(bar_chart, use_container_width=True)
+
+    st.markdown("#### 전체 연구 협력")
+    st.dataframe(style_fwci_table(_fwci_display_dataframe(fwci_df, include_subject=True)), use_container_width=True, hide_index=True)
+    st.download_button(
+        "전체 연구 협력 CSV 다운로드",
+        fwci_df.to_csv(index=False, encoding="utf-8-sig"),
+        file_name="fwci_subject_all.csv",
+        mime="text/csv",
+    )
+
 def render_placeholder(section_name: str) -> None:
     st.info(f"{section_name} 섹션은 추후 구현 예정입니다.")
 
@@ -1413,8 +1635,11 @@ NAV_STRUCTURE = {
         ("WoS 5개년 연구성과", render_wos_performance_tab),
     ],
     "논문분야별 연구성과": [],
-    "우수연구성과 확정": [],
-    "공동연구 네트워크": [],
+    "우수연구성과 선정": [],
+    "국제 연구협력 지표": [
+        ("대학별 국제 연구협력 FWCI Top 50", render_international_fwci_by_university_tab),
+        ("학문분야별(THE) FWCI Top 50", render_international_fwci_by_subject_tab),
+    ],
     "연구지원·전략제언": [],
 }
 
