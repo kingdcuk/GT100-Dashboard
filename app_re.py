@@ -493,22 +493,26 @@ def _normalize_fwci_dataframe(df: pd.DataFrame, subject: str | None = None) -> p
         "institution_region": "Institution_Region",
         "institution region": "Institution_Region",
         "fwci": "FWCI",
+        "subject": "Subject",
+        "the_subject": "Subject",
+        "the subject": "Subject",
     }
     normalized = df.rename(
         columns={
-            col: rename_candidates.get(col.lower().replace(" ", "_"), col)
+            col: rename_candidates.get(col.lower().replace(" ", "_"), rename_candidates.get(col.lower(), col))
             for col in df.columns
         }
     )
-    for required in ("University", "Institution", "Institution_Region", "FWCI"):
+    for required in ("University", "Institution", "Institution_Region", "FWCI", "Subject"):
         if required not in normalized.columns:
-            normalized[required] = None
-    normalized["FWCI"] = pd.to_numeric(normalized["FWCI"], errors="coerce")
-    if subject is not None:
+            if required == "Subject":
+                normalized[required] = subject if subject is not None else "미지정"
+            else:
+                normalized[required] = None
+    if "Subject" in normalized.columns and normalized["Subject"].isna().all() and subject is not None:
         normalized["Subject"] = subject
-    ordered_cols = ["University", "Institution", "Institution_Region", "FWCI"]
-    if "Subject" in normalized.columns:
-        ordered_cols.append("Subject")
+    normalized["FWCI"] = pd.to_numeric(normalized["FWCI"], errors="coerce")
+    ordered_cols = ["University", "Institution", "Institution_Region", "FWCI", "Subject"]
     normalized = normalized[ordered_cols]
     return normalized.dropna(subset=["Institution"]).reset_index(drop=True)
 
@@ -528,16 +532,30 @@ def load_international_fwci_top50() -> pd.DataFrame:
 @st.cache_data
 def load_subject_fwci_top50() -> pd.DataFrame:
     base_dir = THE_SUBJECT_FWCI_DIR
-    if not base_dir.exists():
-        return pd.DataFrame()
     frames: list[pd.DataFrame] = []
-    for path in sorted(base_dir.glob("*.xlsx")):
+
+    # 1) 단일 통합 파일 우선 사용 (예: 국제 연구협력_THE 분야별_FWCI_Top50.xlsx)
+    base_path = Path(__file__).parent
+    for path in sorted(base_path.glob("*THE*FWCI*Top50*.xlsx")):
+        if not path.is_file() or path.name.startswith("~$"):
+            continue
         try:
             df_raw = pd.read_excel(path)
+            frames.append(_normalize_fwci_dataframe(df_raw))
+            break  # 통합 파일 하나만 사용
         except Exception:
             continue
-        subject_name = path.stem.replace("THE_Subject_", "").replace("_", " ").strip()
-        frames.append(_normalize_fwci_dataframe(df_raw, subject=subject_name))
+
+    # 2) 폴더별 개별 파일 추가 로드
+    if base_dir.exists():
+        for path in sorted(base_dir.glob("*.xlsx")):
+            try:
+                df_raw = pd.read_excel(path)
+            except Exception:
+                continue
+            subject_name = path.stem.replace("THE_Subject_", "").replace("_", " ").strip()
+            frames.append(_normalize_fwci_dataframe(df_raw, subject=subject_name))
+
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
@@ -1561,9 +1579,33 @@ def render_international_fwci_by_subject_tab() -> None:
         st.warning("학문분야별 THE FWCI Top 50 데이터를 불러오지 못했습니다. 폴더와 파일을 확인해주세요.")
         return
 
+    # 컬럼 이름 공백/대소문자 정리 및 Subject 컬럼 보강
+    fwci_df = fwci_df.rename(columns=lambda c: c.strip() if isinstance(c, str) else c)
+    if "Subject" not in fwci_df.columns:
+        fallback_col = None
+        for candidate in ["THE_Subject", "the_subject", "THE subject", "subject"]:
+            if candidate in fwci_df.columns:
+                fallback_col = candidate
+                break
+        if fallback_col:
+            fwci_df["Subject"] = fwci_df[fallback_col]
+        else:
+            fwci_df["Subject"] = "미지정"
+    fwci_df["Subject"] = fwci_df["Subject"].fillna("미지정")
+
     subjects = sorted(fwci_df["Subject"].dropna().astype(str).unique().tolist())
     selected_subject = st.selectbox("THE 학문분야 선택", subjects, index=0 if subjects else None)
-    filtered_df = fwci_df[fwci_df["Subject"] == selected_subject] if selected_subject else fwci_df
+    subject_filtered = fwci_df[fwci_df["Subject"] == selected_subject] if selected_subject else fwci_df
+
+    universities = sorted(subject_filtered["University"].dropna().astype(str).unique().tolist())
+    default_idx = 0
+    if universities:
+        try:
+            default_idx = universities.index("전북대")
+        except ValueError:
+            default_idx = 0
+    selected_university = st.selectbox("대학 선택", universities, index=default_idx if universities else None)
+    filtered_df = subject_filtered[subject_filtered["University"] == selected_university] if selected_university else subject_filtered
 
     st.markdown("#### 분야별 국제 연구 협력")
     st.dataframe(_fwci_display_dataframe(filtered_df, include_subject=True), use_container_width=True, hide_index=True)
