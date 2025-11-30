@@ -901,7 +901,7 @@ def render_global_ranking_tab(show_heading: bool = True) -> None:
             .properties(height=320)
         )
         st.altair_chart(chart, use_container_width=True)
-    st.dataframe(ranking_df[["연도", "THE", "QS"]], use_container_width=True, hide_index=True)
+    st.dataframe(ranking_df[["연도", "THE", "QS"]], hide_index=True, use_container_width=True)
 
     st.markdown("#### 전북대 점수 (THE/QS)")
     jbnu_the = _get_jbnu_latest_benchmark_row("THE")
@@ -911,10 +911,10 @@ def render_global_ranking_tab(show_heading: bool = True) -> None:
     else:
         if not jbnu_the.empty:
             st.markdown("##### THE")
-            st.dataframe(style_the_qs_table(jbnu_the), use_container_width=True, hide_index=True)
+            st.dataframe(style_the_qs_table(jbnu_the.astype(str)), hide_index=True, use_container_width=True)
         if not jbnu_qs.empty:
             st.markdown("##### QS")
-            st.dataframe(style_the_qs_table(jbnu_qs), use_container_width=True, hide_index=True)
+            st.dataframe(style_the_qs_table(jbnu_qs.astype(str)), hide_index=True, use_container_width=True)
 
 def render_fact_sheet_tab() -> None:
     st.subheader("Fact Sheet")
@@ -961,14 +961,13 @@ def render_fact_sheet_tab() -> None:
             detail_display = detail_display.drop(columns=["단위"], errors="ignore")
         detail_years = [c for c in detail_display.columns if isinstance(c, int)]
         if detail_years:
-            detail_display[detail_years] = detail_display[detail_years].applymap(
+            detail_display[detail_years] = detail_display[detail_years].map(
                 lambda v: "-" if pd.isna(v) else (f"{int(v):,}" if float(v).is_integer() else f"{float(v):,.2f}")
             )
         detail_color = group_palette.get(detail_indicator, "#fafafa")
 
         def _detail_highlight(_row: pd.Series) -> list[str]:
             return [f"background-color: {detail_color}"] * len(detail_display.columns)
-
         st.dataframe(
             detail_display.style.apply(_detail_highlight, axis=1),
             use_container_width=True,
@@ -1110,7 +1109,7 @@ def render_fact_sheet_tab() -> None:
             return f"{num:,.2f}"
 
         if year_cols:
-            display_df[year_cols] = display_df[year_cols].applymap(format_value)
+            display_df[year_cols] = display_df[year_cols].map(format_value)
 
         display_df["지표명"] = display_df.apply(
             lambda row: row["지표명"] if row.get("단위") in ("", "-", None) else f"{row['지표명']} ({row['단위']})",
@@ -1137,7 +1136,7 @@ def render_fact_sheet_tab() -> None:
             display_df.style.apply(highlight_group, axis=1)
             .set_properties(subset=["지표 그룹"], **{"font-weight": "600"})
         )
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(styled_df, hide_index=True)
     else:
         st.info("표시할 Fact Sheet 데이터가 없습니다.")
     st.caption("지표명 뒤 괄호 안에 단위를 표시했습니다.")
@@ -1326,7 +1325,7 @@ def render_publications_tab() -> None:
     end_idx = start_idx + page_size
     page_df = filtered.iloc[start_idx:end_idx]
 
-    st.dataframe(page_df, use_container_width=True, hide_index=True, height=600)
+    st.dataframe(page_df, hide_index=True, height=600, use_container_width=True)
     st.caption(f"총 {total_rows}건 · 페이지 {current_page}/{total_pages} · 페이지당 {page_size}건")
     st.download_button(
         "CSV 다운로드",
@@ -1451,7 +1450,7 @@ def render_benchmark_the_qs_tab(show_heading: bool = True) -> None:
     ]
     display_df = df_year[display_cols]
     st.dataframe(
-        style_the_qs_table(display_df),
+        style_the_qs_table(display_df.astype(str)),
         use_container_width=True,
         hide_index=True,
     )
@@ -1466,7 +1465,7 @@ def render_benchmark_the_qs_tab(show_heading: bool = True) -> None:
     st.divider()
     st.markdown("#### 전체 연도 테이블")
     st.dataframe(
-        style_the_qs_table(df),
+        style_the_qs_table(df.astype(str)),
         use_container_width=True,
         hide_index=True,
     )
@@ -1504,7 +1503,7 @@ def render_benchmark_scival_tab(show_heading: bool = True) -> None:
     group_df = df_filtered[group_cols]
     st.markdown("#### 선택한 그룹 표")
     st.dataframe(
-        style_scival_table(group_df, highlight_university="전북대"),
+        style_scival_table(group_df.astype(str)),
         use_container_width=True,
         hide_index=True,
     )
@@ -1542,7 +1541,7 @@ def render_benchmark_scival_tab(show_heading: bool = True) -> None:
     # 전체 표 및 다운로드
     st.markdown("#### 전체 테이블")
     st.dataframe(
-        style_scival_table(df_filtered, highlight_university="전북대"),
+        style_scival_table(df_filtered.astype(str)),
         use_container_width=True,
         hide_index=True,
     )
@@ -1572,7 +1571,7 @@ def render_international_fwci_by_university_tab() -> None:
     filtered_df = fwci_df[fwci_df["University"] == selected_university] if selected_university else fwci_df
 
     st.markdown("#### 대학별 국제 연구 협력")
-    st.dataframe(_fwci_display_dataframe(filtered_df), use_container_width=True, hide_index=True)
+    st.dataframe(_fwci_display_dataframe(filtered_df), hide_index=True, use_container_width=True)
     safe_university = str(selected_university or "all").replace(" ", "_")
     st.download_button(
         "CSV 다운로드",
@@ -1605,7 +1604,7 @@ def render_international_fwci_by_university_tab() -> None:
         st.altair_chart(bar_chart, use_container_width=True)
 
     st.markdown("#### 전체 연구 협력")
-    st.dataframe(style_fwci_table(_fwci_display_dataframe(fwci_df)), use_container_width=True, hide_index=True)
+    st.dataframe(style_fwci_table(_fwci_display_dataframe(fwci_df)), hide_index=True, use_container_width=True)
     st.download_button(
         "전체 연구 협력 CSV 다운로드",
         fwci_df.to_csv(index=False, encoding="utf-8-sig"),
@@ -1650,7 +1649,7 @@ def render_international_fwci_by_subject_tab() -> None:
     filtered_df = subject_filtered[subject_filtered["University"] == selected_university] if selected_university else subject_filtered
 
     st.markdown("#### 분야별 국제 연구 협력")
-    st.dataframe(_fwci_display_dataframe(filtered_df, include_subject=True), use_container_width=True, hide_index=True)
+    st.dataframe(_fwci_display_dataframe(filtered_df, include_subject=True), hide_index=True, use_container_width=True)
     safe_subject = str(selected_subject or "all").replace(" ", "_")
     st.download_button(
         "CSV 다운로드",
@@ -1683,7 +1682,7 @@ def render_international_fwci_by_subject_tab() -> None:
         st.altair_chart(bar_chart, use_container_width=True)
 
     st.markdown("#### 전체 연구 협력")
-    st.dataframe(style_fwci_table(_fwci_display_dataframe(fwci_df, include_subject=True)), use_container_width=True, hide_index=True)
+    st.dataframe(style_fwci_table(_fwci_display_dataframe(fwci_df, include_subject=True)), hide_index=True, use_container_width=True)
     st.download_button(
         "전체 연구 협력 CSV 다운로드",
         fwci_df.to_csv(index=False, encoding="utf-8-sig"),
@@ -1708,6 +1707,25 @@ def render_global_benchmark_tab() -> None:
     render_benchmark_the_qs_tab(show_heading=False)
     st.markdown("#### SciVal")
     render_benchmark_scival_tab(show_heading=False)
+
+def scroll_to_top():
+    """
+    `st.components.v1.html`을 사용하여 페이지 최상단으로 스크롤하는 JavaScript를 실행합니다.
+    버튼의 on_click 이벤트에 연결하여 사용합니다.
+    """
+    js = """
+    <script>
+        // ID가 'top'인 앵커를 찾습니다.
+        const topAnchor = window.parent.document.getElementById("top");
+        
+        if (topAnchor) {
+            // 앵커가 있는 위치로 부드럽게 스크롤합니다.
+            topAnchor.scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+    """
+    st.components.v1.html(js, height=0)
+
 
 NAV_STRUCTURE = {
     "전북대학교 현황": [
@@ -1765,10 +1783,19 @@ with st.sidebar:
             is_open = primary == current_primary
             arrow = "\u25bc" if is_open else "\u25b6"
             btn_type = "primary" if is_open else "secondary"
+            
+            # 대분류 버튼 클릭 시 로직 수정
             if st.button(f"{arrow} {primary}", key=f"nav-primary-{primary}", type=btn_type):
-                st.session_state["nav-expanded"] = primary
-                current_primary = primary
-                secondary_label = None
+                if is_open:
+                    # 이미 열려있는 메뉴를 다시 누르면, 페이지 최상단으로 스크롤
+                    scroll_to_top()
+                else:
+                    # 다른 메뉴를 누르면 해당 메뉴를 펼치고 첫 번째 하위 메뉴로 이동
+                    st.session_state["nav-expanded"] = primary
+                    first_secondary = NAV_STRUCTURE.get(primary, [])
+                    if first_secondary:
+                        st.session_state["nav-secondary"] = first_secondary[0][0]
+                    st.rerun()  # 상태 변경을 즉시 반영하기 위해 rerun
 
             if is_open:
                 secondary_options = NAV_STRUCTURE.get(primary, [])
@@ -1777,9 +1804,11 @@ with st.sidebar:
                     if secondary_label not in available_labels:
                         secondary_label = available_labels[0]
                         st.session_state["nav-secondary"] = secondary_label
-                    for label, _ in secondary_options:
+                    for i, (label, _) in enumerate(secondary_options):
                         btn_type = "primary" if label == secondary_label else "secondary"
-                        if st.button(f"\u00b7 {label}", key=f"nav-secondary-{primary}-{label}", type=btn_type):
+                        # 소분류 버튼 클릭 시 로직 수정
+                        if st.button(f"· {label}", key=f"nav-secondary-{primary}-{i}", type=btn_type):
+                            scroll_to_top() # 맨 위로 스크롤
                             secondary_label = label
                             st.session_state["nav-secondary"] = label
                             st.session_state["nav-expanded"] = primary
@@ -1791,8 +1820,11 @@ secondary_options = NAV_STRUCTURE.get(primary_section, [])
 secondary_label = st.session_state.get("nav-secondary") if secondary_options else None
 
 st.subheader(
-    f"{primary_section} \u00b7 {secondary_label}" if secondary_label else primary_section
+    f"{primary_section} · {secondary_label}" if secondary_label else primary_section
 )
+
+# 페이지 최상단에 보이지 않는 앵커(닻)를 추가합니다.
+st.markdown("<a id='top'></a>", unsafe_allow_html=True)
 
 if secondary_label:
     renderer_map = {label: renderer for label, renderer in secondary_options}
